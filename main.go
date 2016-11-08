@@ -3,8 +3,10 @@ package main
 import (
 	"bufio"
 	"crypto/tls"
+	"flag"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"strings"
 	"syscall"
@@ -21,7 +23,7 @@ type ServerInterface interface {
 }
 type Server struct {
 	server     string
-	conn       *tls.Conn
+	conn       net.Conn
 	port       string
 	nick       string
 	realName   string
@@ -29,7 +31,7 @@ type Server struct {
 	msgChan    chan Msg
 	serverChan chan string
 	ssl        bool
-	_dir       string
+	Dir        string
 }
 
 // TODO: Rewrite. This is horrible code
@@ -87,8 +89,9 @@ func createFiles(directory string) bool {
 	return true
 }
 
-func writeOutLog(directory string, text string) {
-	f, _ := os.OpenFile(directory+"/out", os.O_RDWR|os.O_APPEND, 0660)
+func (server *Server) writeOutLog(channel string, text string) {
+	createFiles(server.Dir + "/" + channel)
+	f, _ := os.OpenFile(server.Dir+"/"+channel+"/out", os.O_RDWR|os.O_APPEND, 0660)
 	_, _ = f.WriteString(text + "\n")
 	f.Close()
 }
@@ -138,11 +141,17 @@ func (server *Server) listenServer() {
 }
 
 func (server *Server) createServer() {
-	conf := &tls.Config{
-		InsecureSkipVerify: true,
+	var conn net.Conn
+	var err error
+	if server.ssl {
+		conf := &tls.Config{
+			InsecureSkipVerify: true,
+		}
+		conn, err = tls.Dial("tcp", fmt.Sprintf("%s:%s", server.server, server.port), conf)
+	} else {
+		conn, err = net.Dial("tcp", fmt.Sprintf("%s:%s", server.server, server.port))
 	}
 
-	conn, err := tls.Dial("tcp", fmt.Sprintf("%s:%s", server.server, server.port), conf)
 	if err != nil {
 		log.Fatal(err)
 		os.Exit(1)
@@ -170,7 +179,6 @@ func (server *Server) handleMsg(msg Msg) {
 
 func (server *Server) handleServer(s string) {
 	msg := parse(s)
-	log.Print(msg["msg"])
 
 	if msg["event"] == "PING" {
 		server.conn.Write([]byte(fmt.Sprintf("PONG :%s", msg["msg"]) + "\n"))
@@ -187,6 +195,9 @@ func (server *Server) handleServer(s string) {
 			go server.listenFile(channel)
 			server.channels[channel] = true
 		}
+		server.writeOutLog(channel, msg["raw"])
+	} else {
+		server.writeOutLog("", msg["raw"])
 	}
 }
 
@@ -204,20 +215,30 @@ func (server *Server) Run() {
 	}
 }
 
-func main() {
+func start() {
 
-	server := Server{
-		server:     IRCServer,
-		port:       IRCPort,
-		nick:       nick,
-		realName:   realName,
+}
+func main() {
+	server := flag.String("s", "irc.freenode.net", "Specify server")
+	port := flag.String("p", "", "Server port (default 6667, SSL default 6697)")
+	ssl := flag.Bool("tls", false, "Use TLS for the connection (default false)")
+	_ = flag.String("k", "IIPASS", "Specify a environment variable for your IRC password")
+	path := flag.String("i", "~/irc", "Specify a path for the IRC connection")
+	nick := flag.String("n", "iii", "Speciy a default nick")
+	realName := flag.String("f", "ii Improved", "Speciy a default real name")
+
+	flag.Parse()
+
+	serverRun := Server{
+		server:     *server,
+		port:       *port,
+		nick:       *nick,
+		realName:   *realName,
 		channels:   map[string]bool{},
 		msgChan:    make(chan Msg),
 		serverChan: make(chan string),
-		ssl:        true,
-		Dir:        "./irc/" + IRCServer}
-
-	server.createServer()
-	server.Run()
-
+		ssl:        *ssl,
+		Dir:        *path + "/" + *server}
+	serverRun.createServer()
+	serverRun.Run()
 }

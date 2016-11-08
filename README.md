@@ -34,19 +34,17 @@ Usage of ./iii:
 ```
 → tree irc
 irc
-├── in
-├── irc.hackint.org
-│   ├── #buf
-│   │   ├── in
-│   │   └── out
-│   ├── foxboron
-│   │   ├── in
-│   │   └── out
-│   ├── in
-│   └── out
-└── out
+└── irc.hackint.org
+    ├── #buf
+    │   ├── in
+    │   └── out
+    ├── foxboron
+    │   ├── in
+    │   └── out
+    ├── in
+    └── out
 
-3 directories, 8 files
+3 directories, 6 files
 ```
 
 

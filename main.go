@@ -8,13 +8,31 @@ import (
 	"os"
 	"strings"
 	"syscall"
+	"time"
 )
 
-type Channel struct {
+type Msg struct {
 	channel string
+	file    string
 	msg     string
 }
+type ServerInterface interface {
+	listenFile()
+}
+type Server struct {
+	server     string
+	conn       *tls.Conn
+	port       string
+	nick       string
+	realName   string
+	channels   map[string]bool
+	msgChan    chan Msg
+	serverChan chan string
+	ssl        bool
+	_dir       string
+}
 
+// TODO: Rewrite. This is horrible code
 func parse(msg string) map[string]string {
 	splitted := strings.SplitN(msg, " :", 3)
 	userinfo := strings.Split(splitted[0], " ")
@@ -33,10 +51,10 @@ func parse(msg string) map[string]string {
 	}
 
 	info := map[string]string{
-		"user":    user,
+		"user":    strings.ToLower(user),
 		"msg":     splitted[len(splitted)-1],
 		"event":   event,
-		"channel": channel,
+		"channel": strings.ToLower(channel),
 		"raw":     msg,
 	}
 	return info
@@ -45,30 +63,47 @@ func parse(msg string) map[string]string {
 const IRCDir = "./irc"
 const SSL = true
 
-func createChannel(channel string) {
-	err := os.MkdirAll(IRCDir+"/"+channel, 0744)
-	if err != nil {
-		log.Fatal(err)
+// Creates the fifo files and directories
+func createFiles(directory string) bool {
+	if _, err := os.Stat(directory); err == nil {
+		return false
 	}
 
-	f, _ := os.OpenFile(IRCDir+"/"+channel+"/out", os.O_CREATE, 0660)
-	defer f.Close()
-	err = syscall.Mkfifo(IRCDir+"/"+channel+"/in", 0700)
+	err := os.MkdirAll(directory, 0744)
 	if err != nil {
 		log.Print(err)
 	}
+
+	f, err := os.OpenFile(directory+"/out", os.O_CREATE, 0660)
+	defer f.Close()
+	if err != nil {
+		log.Print(err)
+	}
+
+	err = syscall.Mkfifo(directory+"/in", 0700)
+	if err != nil {
+		log.Print(err)
+	}
+	return true
 }
 
-func writeOutLog(channel string, text string) {
-	f, _ := os.OpenFile(IRCDir+"/"+channel+"/out", os.O_RDWR|os.O_APPEND, 0660)
+func writeOutLog(directory string, text string) {
+	f, _ := os.OpenFile(directory+"/out", os.O_RDWR|os.O_APPEND, 0660)
 	_, _ = f.WriteString(text + "\n")
 	f.Close()
 }
 
-func listenChannel(channel string, c chan Channel) {
-	go func(channel string) {
-		file, err := os.OpenFile(IRCDir+"/"+channel+"/in", os.O_CREATE|syscall.O_RDONLY|syscall.O_NONBLOCK, os.ModeNamedPipe)
-		fmt.Println(channel)
+func (server *Server) listenFile(channel string) {
+	channel = strings.ToLower(channel)
+	filePath := server.Dir + "/" + channel
+	if channel != "" {
+		filePath = filePath + "/"
+	}
+
+	createFiles(filePath)
+
+	go func(channel string, filePath string) {
+		file, err := os.OpenFile(filePath+"in", os.O_CREATE|syscall.O_RDONLY|syscall.O_NONBLOCK, os.ModeNamedPipe)
 		defer file.Close()
 		if err != nil {
 			log.Print(err)
@@ -78,113 +113,111 @@ func listenChannel(channel string, c chan Channel) {
 		for {
 			bytes, _, _ := buffer.ReadLine()
 			if len(bytes) != 0 {
-				msg := string(bytes)
-				c <- Channel{channel: channel, msg: msg}
+				server.msgChan <- Msg{channel: channel, msg: string(bytes), file: filePath}
 			}
+			time.Sleep(10 * time.Millisecond)
 		}
-	}(channel)
+	}(channel, filePath)
 }
 
-func listenFile(channel string, c chan string) {
-	go func(channel string) {
-		file, err := os.OpenFile(channel, os.O_CREATE|syscall.O_RDONLY|syscall.O_NONBLOCK, os.ModeNamedPipe)
-		defer file.Close()
-		if err != nil {
-			log.Print(err)
-
-		}
-		buffer := bufio.NewReader(file)
-		for {
-			bytes, _, _ := buffer.ReadLine()
-			if len(bytes) != 0 {
-				msg := string(bytes)
-				c <- msg
-			}
-		}
-	}(channel)
-}
-
-func listenServer(conn *tls.Conn, c chan string) {
+func (server *Server) listenServer() {
 	go func() {
-
-		user_msg := fmt.Sprintf("USER %s %s %s :Go FTW", nick, nick, nick)
-		conn.Write([]byte(user_msg + "\n"))
+		user_msg := fmt.Sprintf("USER %s %s %s :Go FTW", server.nick, server.nick, server.nick)
+		server.conn.Write([]byte(user_msg + "\n"))
 
 		nick_msg := fmt.Sprintf("NICK %s", nick)
-		conn.Write([]byte(nick_msg + "\n"))
+		server.conn.Write([]byte(nick_msg + "\n"))
 
-		buffer := bufio.NewReader(conn)
+		buffer := bufio.NewScanner(server.conn)
 		for {
-			bytes, _, _ := buffer.ReadLine()
-			if len(bytes) != 0 {
-				c <- string(bytes)
+			for buffer.Scan() {
+				server.serverChan <- buffer.Text()
 			}
 		}
 	}()
 }
 
-func createServer() *tls.Conn {
+func (server *Server) createServer() {
 	conf := &tls.Config{
 		InsecureSkipVerify: true,
 	}
 
-	conn, err := tls.Dial("tcp", fmt.Sprintf("%s:%s", IRCServer, IRCPort), conf)
-	if err != nil {
-		println("Dial failed:", err.Error())
-		os.Exit(1)
-	}
-	return conn
-}
-
-func main() {
-	err := os.MkdirAll(IRCDir, 0744)
+	conn, err := tls.Dial("tcp", fmt.Sprintf("%s:%s", server.server, server.port), conf)
 	if err != nil {
 		log.Fatal(err)
+		os.Exit(1)
 	}
-	_, _ = os.OpenFile(IRCDir+"/out", os.O_CREATE, 0600)
-	err = syscall.Mkfifo(IRCDir+"/in", 0700)
-	if err != nil {
-		log.Print(err)
+	server.conn = conn
+}
+
+func (server *Server) handleMsg(msg Msg) {
+	events := strings.SplitN(msg.msg, " ", 3)
+	// Events
+	if "/j" == events[0] {
+		_, ok := server.channels[events[1]]
+		if ok == false {
+			server.conn.Write([]byte(fmt.Sprintf("JOIN :%s", events[1]) + "\n"))
+			go server.listenFile(events[1])
+			server.channels[events[1]] = true
+		}
+
+	} else if "/m" == events[0] {
+		server.conn.Write([]byte(fmt.Sprintf("PRIVMSG %s :%s", events[1], events[2]) + "\n"))
+	} else {
+		server.conn.Write([]byte(fmt.Sprintf("PRIVMSG %s :%s", msg.channel, msg.msg) + "\n"))
 	}
+}
 
-	conn := createServer()
+func (server *Server) handleServer(s string) {
+	msg := parse(s)
+	log.Print(msg["msg"])
 
-	serverConnection := make(chan string)
-	go func() { listenServer(conn, serverConnection) }()
+	if msg["event"] == "PING" {
+		server.conn.Write([]byte(fmt.Sprintf("PONG :%s", msg["msg"]) + "\n"))
+	}
+	if len(msg["channel"]) != 0 && msg["event"] == "PRIVMSG" {
+		var channel string
+		if msg["channel"] == strings.ToLower(nick) {
+			channel = msg["user"]
+		} else {
+			channel = msg["channel"]
+		}
+		_, ok := server.channels[channel]
+		if ok == false {
+			go server.listenFile(channel)
+			server.channels[channel] = true
+		}
+	}
+}
 
-	server := make(chan string)
-	go func() { listenFile(IRCDir+"/in", server) }()
-
-	channels := make(chan Channel)
+func (server *Server) Run() {
+	go server.listenServer()
+	go server.listenFile("")
 
 	for {
 		select {
-		case s := <-serverConnection:
-			msg := parse(s)
-			fmt.Println(s)
-			if msg["event"] == "PING" {
-				fmt.Println(msg["msg"])
-				conn.Write([]byte(fmt.Sprintf("PONG :%s", msg["msg"]) + "\n"))
-			}
-			if len(msg["channel"]) != 0 {
-				if string(msg["channel"][0]) == string("#") {
-					fmt.Println("Wrote log")
-					writeOutLog(msg["channel"], msg["raw"])
-				}
-			}
-			fmt.Println(msg["channel"])
-		case s := <-server:
-			events := strings.Split(s, " ")
-
-			// Events
-			if "/j" == events[0] {
-				conn.Write([]byte(fmt.Sprintf("JOIN :%s", events[1]) + "\n"))
-				createChannel(events[1])
-				go func() { listenChannel(events[1], channels) }()
-			}
-
-		case s := <-channels:
-			conn.Write([]byte(fmt.Sprintf(s.msg) + "\n"))
+		case s := <-server.serverChan:
+			server.handleServer(s)
+		case s := <-server.msgChan:
+			server.handleMsg(s)
 		}
 	}
+}
+
+func main() {
+
+	server := Server{
+		server:     IRCServer,
+		port:       IRCPort,
+		nick:       nick,
+		realName:   realName,
+		channels:   map[string]bool{},
+		msgChan:    make(chan Msg),
+		serverChan: make(chan string),
+		ssl:        true,
+		Dir:        "./irc/" + IRCServer}
+
+	server.createServer()
+	server.Run()
+
 }

@@ -118,6 +118,7 @@ func createFiles(directory string) bool {
 func (server *Server) writeOutLog(channel string, text Parsed) {
 	createFiles(server.Dir + "/" + channel)
 	f, _ := os.OpenFile(server.Dir+"/"+channel+"/out", os.O_RDWR|os.O_APPEND, 0660)
+	defer f.Close()
 
 	t := time.Now()
 	currTime := fmt.Sprintf("%s", t.Format("2006-01-02 15:04:05"))
@@ -142,7 +143,6 @@ func (server *Server) writeOutLog(channel string, text Parsed) {
 	}
 	if msg != "" {
 		_, _ = f.WriteString(msg + "\n")
-		f.Close()
 	}
 }
 

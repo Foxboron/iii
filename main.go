@@ -205,10 +205,19 @@ func (server *Server) handleMsg(msg Msg) {
 			server.Write(fmt.Sprintf("JOIN :%s", events[1]))
 			go server.listenFile(events[1])
 			server.channels[events[1]] = true
+			if len(events) > 2 {
+				server.Write(fmt.Sprintf("PRIVMSG %s :%s", events[1], events[2]))
+			}
 		}
-
-	} else if "/m" == events[0] {
-		server.Write(fmt.Sprintf("PRIVMSG %s :%s", events[1], events[2]))
+	} else if "/a" == events[0] {
+		server.Write(fmt.Sprintf("AWAY :%s", strings.Join(events[1:], " ")))
+	} else if "/n" == events[0] {
+		server.Write(fmt.Sprintf("NICK %s", events[1]))
+	} else if "/t" == events[0] {
+		server.Write(fmt.Sprintf("TOPIC %s :%s", events[1], strings.Join(events[2:], " ")))
+	} else if "/l" == events[0] {
+		server.Write(fmt.Sprintf("PART %s", events[1]))
+		delete(server.channels, events[1])
 	} else {
 		server.Write(fmt.Sprintf("PRIVMSG %s :%s", msg.channel, msg.msg) + "\n")
 	}

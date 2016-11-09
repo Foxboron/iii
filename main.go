@@ -77,12 +77,7 @@ func parse(s string) Parsed {
 		nick = prefixSplit[0]
 		userinfo = prefixSplit[1]
 	}
-	//fmt.Println("----")
-	//fmt.Println("channel", args[0])
-	//fmt.Println("nick:", nick)
-	//fmt.Println("info:", userinfo)
-	//fmt.Println("args:", args)
-	//fmt.Println("")
+
 	return Parsed{nick: nick,
 		channel:  args[0],
 		userinfo: userinfo,
@@ -96,21 +91,18 @@ func createFiles(directory string) bool {
 	if _, err := os.Stat(directory); err == nil {
 		return false
 	}
-
 	err := os.MkdirAll(directory, 0744)
 	if err != nil {
-		log.Print(err)
+		log.Print("Tried making directory:", directory, err)
 	}
-
 	f, err := os.OpenFile(directory+"/out", os.O_CREATE, 0660)
 	defer f.Close()
 	if err != nil {
-		log.Print(err)
+		log.Print("Tried opening out file for directory:", directory, err)
 	}
-
 	err = syscall.Mkfifo(directory+"/in", 0700)
 	if err != nil {
-		log.Print(err)
+		log.Print("Tried creating fifo file for directory:", directory, err)
 	}
 	return true
 }
@@ -158,12 +150,10 @@ func (server *Server) listenFile(channel string) {
 	}
 
 	createFiles(filePath)
-
 	file, err := os.OpenFile(filePath+"in", os.O_CREATE|syscall.O_RDONLY|syscall.O_NONBLOCK, os.ModeNamedPipe)
 	defer file.Close()
 	if err != nil {
-		log.Print(err)
-
+		log.Print("Tried listening on channel:", channel, err)
 	}
 	buffer := bufio.NewReader(file)
 	for {
@@ -201,9 +191,8 @@ func (server *Server) createServer() {
 	} else {
 		conn, err = net.Dial("tcp", fmt.Sprintf("%s:%s", server.server, server.port))
 	}
-
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("Connection blew up:", err)
 		os.Exit(1)
 	}
 	server.conn = conn
@@ -244,7 +233,6 @@ func (server *Server) handleServer(s string) {
 	} else {
 		channel = strings.ToLower(msg.channel)
 	}
-
 	// Check if we have a thread on the channel
 	// Create if there isnt
 	_, ok := server.channels[channel]
@@ -258,7 +246,6 @@ func (server *Server) handleServer(s string) {
 func (server *Server) Run() {
 	go server.listenServer()
 	go server.listenFile("")
-
 	for {
 		select {
 		case s := <-server.serverChan:
@@ -269,9 +256,6 @@ func (server *Server) Run() {
 	}
 }
 
-func start() {
-}
-
 func main() {
 	server := flag.String("s", "irc.freenode.net", "Specify server")
 	port := flag.String("p", "", "Server port (default 6667, SSL default 6697)")
@@ -280,7 +264,6 @@ func main() {
 	path := flag.String("i", "~/irc", "Specify a path for the IRC connection")
 	nick := flag.String("n", "iii", "Speciy a default nick")
 	realName := flag.String("f", "ii Improved", "Speciy a default real name")
-
 	flag.Parse()
 
 	serverRun := Server{

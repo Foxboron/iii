@@ -174,6 +174,9 @@ func (server *Server) listenServer() {
 	for {
 		for buffer.Scan() {
 			server.serverChan <- buffer.Text()
+			if strings.Split(buffer.Text(), " :")[0] == "ERROR" {
+				return
+			}
 		}
 	}
 }
@@ -223,9 +226,24 @@ func (server *Server) handleMsg(msg Msg) {
 	}
 }
 
+func (server *Server) rejoinChannels() {
+	for channel, _ := range server.channels {
+		server.Write(fmt.Sprintf("JOIN :%s", channel))
+	}
+}
+
 func (server *Server) handleServer(s string) {
 	msg := parse(s)
-
+	if msg.event == "ERROR" {
+		server.createServer()
+		go server.listenServer()
+		return
+	}
+	if msg.event == "266" {
+		// Rejoin channels
+		server.rejoinChannels()
+		return
+	}
 	if msg.event == "PING" {
 		server.Write(fmt.Sprintf("PONG %s", msg.args[0]))
 		return

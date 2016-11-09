@@ -1,6 +1,11 @@
 #!/usr/bin/bash
 
 
+# Watches over the directories and executes commands if it
+# finds anything.
+# 
+# It is horrible, i know
+
 CMDMARK="."
 CMDDIR="./irc/cmd"
 
@@ -28,7 +33,7 @@ do
                 if [[ $cmdLine == $CMDMARK* ]]; then 
                     cmdFile=$(echo $cmdLine | cut -d"." -f2- | cut -d" " -f1) 
                     cmdArgs=$(echo $cmdLine | cut -d" " -f2-) 
-                    $CMDDIR/$cmdFile $cmdArgs
+                    $CMDDIR/$cmdFile $cmdArgs > $outFile
                 fi
             fi  
         done

@@ -166,12 +166,10 @@ func (server *Server) listenFile(channel string) {
 }
 
 func (server *Server) listenServer() {
-	user_msg := fmt.Sprintf("USER %s %s %s :Go FTW", server.nick, server.nick, server.nick)
-	server.Write(user_msg)
-
-	nick_msg := fmt.Sprintf("NICK %s", server.nick)
-	server.Write(nick_msg)
-
+	userMsg := fmt.Sprintf("USER %s %s %s :Go FTW", server.nick, server.nick, server.nick)
+	server.Write(userMsg)
+	nickMsg := fmt.Sprintf("NICK %s", server.nick)
+	server.Write(nickMsg)
 	buffer := bufio.NewScanner(server.conn)
 	for {
 		for buffer.Scan() {

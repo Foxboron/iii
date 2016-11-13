@@ -258,7 +258,7 @@ func (server *Server) handleServer(s string) {
 		server.Write(fmt.Sprintf("PONG %s", msg.args[0]))
 		return
 	}
-	if len(msg.nick) == 0 && msg.channel == server.nick || msg.channel == "*" {
+	if len(msg.nick) == 0 && msg.channel == server.nick || msg.channel == "*" || msg.event == "QUIT" {
 		server.writeOutLog("", msg)
 		return
 	}

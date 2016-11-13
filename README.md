@@ -5,10 +5,15 @@ iii - ii Improved
 
   
 suckless version of suckless ii, but with horriblehorrible Golang.  
-Goal is to support TLS, like sane people.  
 http://tools.suckless.org/ii/
+  
+iii (and ii) is a filsystem-based IRC client, using files and FIFO pipes to
+communicate with the IRC server. It allows the creation of simple scripts and
+bots.
 
-Goal is 1:1 parity featurewise, but below 500 lines of bloody code.
+The goal is to have 1:1 feature parity with ii, and some additional features:
+* TLS Support
+* Server reconnection & channel rejoin
 
 
 ```
@@ -46,6 +51,3 @@ irc
 
 3 directories, 6 files
 ```
-
-
-WIP - Please don't be mad at me

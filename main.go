@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/user"
 	"strings"
 	"syscall"
 	"time"
@@ -25,6 +26,7 @@ type Server struct {
 	port       string
 	nick       string
 	realName   string
+	password   string
 	channels   map[string]bool
 	msgChan    chan Msg
 	serverChan chan string
@@ -166,10 +168,11 @@ func (server *Server) listenFile(channel string) {
 }
 
 func (server *Server) listenServer() {
-	userMsg := fmt.Sprintf("USER %s %s %s :Go FTW", server.nick, server.nick, server.nick)
-	server.Write(userMsg)
-	nickMsg := fmt.Sprintf("NICK %s", server.nick)
-	server.Write(nickMsg)
+	if server.password != "" {
+		server.Write(fmt.Sprintf("PASS %s", server.password))
+	}
+	server.Write(fmt.Sprintf("USER %s 0 * :%s", server.nick, server.realName))
+	server.Write(fmt.Sprintf("NICK %s", server.nick))
 	buffer := bufio.NewScanner(server.conn)
 	for {
 		for buffer.Scan() {
@@ -290,10 +293,10 @@ func (server *Server) Run() {
 
 func main() {
 	server := flag.String("s", "irc.freenode.net", "Specify server")
-	port := flag.String("p", "", "Server port (default 6667, SSL default 6697)")
+	port := flag.String("p", "", "Server port (default 6667, TLS default 6697)")
 	tls := flag.Bool("tls", false, "Use TLS for the connection (default false)")
-	_ = flag.String("k", "IIPASS", "Specify a environment variable for your IRC password")
-	path := flag.String("i", "~/irc", "Specify a path for the IRC connection")
+	pass := flag.String("k", "IIPASS", "Specify a environment variable for your IRC password")
+	path := flag.String("i", "", "Specify a path for the IRC connection (default ~/irc)")
 	nick := flag.String("n", "iii", "Speciy a default nick")
 	realName := flag.String("f", "ii Improved", "Speciy a default real name")
 	flag.Parse()
@@ -305,11 +308,21 @@ func main() {
 			*port = "6667"
 		}
 	}
+
+	if *path == "" {
+		usr, err := user.Current()
+		if err != nil {
+			log.Fatal("Could not get home directory", err)
+		}
+		*path = usr.HomeDir + "/irc"
+	}
+
 	serverRun := Server{
 		server:     *server,
 		port:       *port,
 		nick:       *nick,
 		realName:   *realName,
+		password:   os.Getenv(*pass),
 		channels:   map[string]bool{},
 		msgChan:    make(chan Msg),
 		serverChan: make(chan string),

@@ -28,7 +28,7 @@ type Server struct {
 	channels   map[string]bool
 	msgChan    chan Msg
 	serverChan chan string
-	ssl        bool
+	tls        bool
 	Dir        string
 }
 
@@ -182,21 +182,28 @@ func (server *Server) listenServer() {
 }
 
 func (server *Server) createServer() {
-	var conn net.Conn
+	var tlsConn net.Conn
 	var err error
-	if server.ssl {
-		conf := &tls.Config{
-			InsecureSkipVerify: true,
-		}
-		conn, err = tls.Dial("tcp", fmt.Sprintf("%s:%s", server.server, server.port), conf)
-	} else {
-		conn, err = net.Dial("tcp", fmt.Sprintf("%s:%s", server.server, server.port))
+	tcpAddr, err := net.ResolveTCPAddr("tcp", fmt.Sprintf("%s:%s", server.server, server.port))
+	if err != nil {
+		log.Fatal("ResolveTCPAddr failed:", err.Error())
+		os.Exit(1)
 	}
+	conn, err := net.DialTCP("tcp", nil, tcpAddr)
 	if err != nil {
 		log.Fatal("Connection blew up:", err)
 		os.Exit(1)
 	}
-	server.conn = conn
+	err = conn.SetKeepAlive(true)
+	if err != nil {
+		log.Print("Could not set keep alive:", err)
+	}
+	if server.tls {
+		tlsConn = tls.Client(conn, &tls.Config{
+			InsecureSkipVerify: true,
+		})
+	}
+	server.conn = tlsConn
 }
 
 func (server *Server) handleMsg(msg Msg) {
@@ -284,13 +291,20 @@ func (server *Server) Run() {
 func main() {
 	server := flag.String("s", "irc.freenode.net", "Specify server")
 	port := flag.String("p", "", "Server port (default 6667, SSL default 6697)")
-	ssl := flag.Bool("tls", false, "Use TLS for the connection (default false)")
+	tls := flag.Bool("tls", false, "Use TLS for the connection (default false)")
 	_ = flag.String("k", "IIPASS", "Specify a environment variable for your IRC password")
 	path := flag.String("i", "~/irc", "Specify a path for the IRC connection")
 	nick := flag.String("n", "iii", "Speciy a default nick")
 	realName := flag.String("f", "ii Improved", "Speciy a default real name")
 	flag.Parse()
 
+	if *port == "" {
+		if *tls {
+			*port = "6697"
+		} else {
+			*port = "6667"
+		}
+	}
 	serverRun := Server{
 		server:     *server,
 		port:       *port,
@@ -299,7 +313,7 @@ func main() {
 		channels:   map[string]bool{},
 		msgChan:    make(chan Msg),
 		serverChan: make(chan string),
-		ssl:        *ssl,
+		tls:        *tls,
 		Dir:        *path + "/" + *server}
 	serverRun.createServer()
 	serverRun.Run()

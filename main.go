@@ -144,6 +144,10 @@ func (server *Server) Write(msg string) {
 	server.conn.Write([]byte(msg + "\n"))
 }
 
+func (server *Server) Writef(msg string, arg ...interface{}) {
+	server.Write(fmt.Sprintf(msg, arg...))
+}
+
 func (server *Server) listenFile(channel string) {
 	channel = strings.ToLower(channel)
 	filePath := server.Dir + "/" + channel
@@ -169,10 +173,10 @@ func (server *Server) listenFile(channel string) {
 
 func (server *Server) listenServer() {
 	if server.password != "" {
-		server.Write(fmt.Sprintf("PASS %s", server.password))
+		server.Writef("PASS %s", server.password)
 	}
-	server.Write(fmt.Sprintf("USER %s 0 * :%s", server.nick, server.realName))
-	server.Write(fmt.Sprintf("NICK %s", server.nick))
+	server.Writef("USER %s 0 * :%s", server.nick, server.realName)
+	server.Writef("NICK %s", server.nick)
 	buffer := bufio.NewScanner(server.conn)
 	for {
 		for buffer.Scan() {
@@ -215,30 +219,30 @@ func (server *Server) handleMsg(msg Msg) {
 	if "/j" == events[0] {
 		_, ok := server.channels[events[1]]
 		if ok == false {
-			server.Write(fmt.Sprintf("JOIN :%s", events[1]))
+			server.Writef("JOIN :%s", events[1])
 			go server.listenFile(events[1])
 			server.channels[events[1]] = true
 			if len(events) > 2 {
-				server.Write(fmt.Sprintf("PRIVMSG %s :%s", events[1], events[2]))
+				server.Writef("PRIVMSG %s :%s", events[1], events[2])
 			}
 		}
 	} else if "/a" == events[0] {
-		server.Write(fmt.Sprintf("AWAY :%s", strings.Join(events[1:], " ")))
+		server.Writef("AWAY :%s", strings.Join(events[1:], " "))
 	} else if "/n" == events[0] {
-		server.Write(fmt.Sprintf("NICK %s", events[1]))
+		server.Writef("NICK %s", events[1])
 	} else if "/t" == events[0] {
-		server.Write(fmt.Sprintf("TOPIC %s :%s", events[1], strings.Join(events[2:], " ")))
+		server.Writef("TOPIC %s :%s", events[1], strings.Join(events[2:], " "))
 	} else if "/l" == events[0] {
-		server.Write(fmt.Sprintf("PART %s", events[1]))
+		server.Writef("PART %s", events[1])
 		delete(server.channels, events[1])
 	} else {
-		server.Write(fmt.Sprintf("PRIVMSG %s :%s", msg.channel, msg.msg) + "\n")
+		server.Writef("PRIVMSG %s :%s", msg.channel, msg.msg)
 	}
 }
 
 func (server *Server) rejoinChannels() {
 	for channel, _ := range server.channels {
-		server.Write(fmt.Sprintf("JOIN :%s", channel))
+		server.Writef("JOIN :%s", channel)
 	}
 }
 
@@ -255,7 +259,7 @@ func (server *Server) handleServer(s string) {
 		return
 	}
 	if msg.event == "PING" {
-		server.Write(fmt.Sprintf("PONG %s", msg.args[0]))
+		server.Writef("PONG %s", msg.args[0])
 		return
 	}
 	if len(msg.nick) == 0 && msg.channel == server.nick || msg.channel == "*" || msg.event == "QUIT" {
@@ -281,8 +285,11 @@ func (server *Server) handleServer(s string) {
 func (server *Server) Run() {
 	go server.listenServer()
 	go server.listenFile("")
+	ticker := time.NewTicker(1 * time.Minute)
 	for {
 		select {
+		case <-ticker.C:
+			server.Writef("PING %d", time.Now().UnixNano())
 		case s := <-server.serverChan:
 			server.handleServer(s)
 		case s := <-server.msgChan:

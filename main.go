@@ -110,33 +110,36 @@ func createFiles(directory string) bool {
 }
 
 func (server *Server) writeOutLog(channel string, text Parsed) {
-	createFiles(server.Dir + "/" + channel)
-	f, _ := os.OpenFile(server.Dir+"/"+channel+"/out", os.O_RDWR|os.O_APPEND, 0660)
-	defer f.Close()
-
-	t := time.Now()
-	currTime := fmt.Sprintf("%s", t.Format("2006-01-02 15:04:05"))
 
 	msg := ""
 	if text.event == "PRIVMSG" {
-		msg = fmt.Sprintf("%s <%s> %s", currTime, text.nick, text.args[1])
+		msg = fmt.Sprintf("<%s> %s", text.nick, text.args[1])
 	} else if text.event == "JOIN" {
-		msg = fmt.Sprintf("%s -!- %s(~%s) has joined %s", currTime, text.nick, text.userinfo, text.channel)
+		msg = fmt.Sprintf("-!- %s(~%s) has joined %s", text.nick, text.userinfo, text.channel)
 	} else if text.event == "PART" {
-		msg = fmt.Sprintf("%s -!- %s(~%s) has left %s", currTime, text.nick, text.userinfo, text.channel)
+		msg = fmt.Sprintf("-!- %s(~%s) has left %s", text.nick, text.userinfo, text.channel)
 	} else if text.event == "QUIT" {
-		msg = fmt.Sprintf("%s -!- %s(~%s) has quit", currTime, text.nick, text.userinfo)
+		msg = fmt.Sprintf("-!- %s(~%s) has quit", text.nick, text.userinfo)
 	} else if text.event == "MODE" {
-		msg = fmt.Sprintf("%s -!- %s changed mode/%s -> %s", currTime, text.nick, text.channel, text.args[1])
+		msg = fmt.Sprintf("-!- %s changed mode/%s -> %s", text.nick, text.channel, text.args[1])
 	} else if text.event == "NOTICE" {
-		msg = fmt.Sprintf("%s -!- NOTICE %s", currTime, text.args[1])
+		msg = fmt.Sprintf("-!- NOTICE %s", text.args[1])
 	} else if text.event == "KICK" {
-		msg = fmt.Sprintf("%s -!- %s kicked %s (\"%s\")", currTime, text.nick, text.args[1], text.args[2])
+		msg = fmt.Sprintf("-!- %s kicked %s (\"%s\")", text.nick, text.args[1], text.args[2])
 	} else if text.event == "TOPIC" {
-		msg = fmt.Sprintf("%s -!- %s changed topic to \"%s\"", currTime, text.nick, text.args[1])
+		msg = fmt.Sprintf("-!- %s changed topic to \"%s\"", text.nick, text.args[1])
 	}
+	server.WriteChannel(channel, msg)
+}
+
+func (server *Server) WriteChannel(channel string, msg string) {
 	if msg != "" {
-		_, _ = f.WriteString(msg + "\n")
+		createFiles(server.Dir + "/" + channel)
+		f, _ := os.OpenFile(server.Dir+"/"+channel+"/out", os.O_RDWR|os.O_APPEND, 0660)
+		defer f.Close()
+		t := time.Now()
+		currTime := fmt.Sprintf("%s", t.Format("2006-01-02 15:04:05"))
+		_, _ = f.WriteString(currTime + " " + msg + "\n")
 	}
 }
 
@@ -237,6 +240,8 @@ func (server *Server) handleMsg(msg Msg) {
 		delete(server.channels, events[1])
 	} else {
 		server.Writef("PRIVMSG %s :%s", msg.channel, msg.msg)
+		s := fmt.Sprintf("<%s> %s", server.nick, msg.msg)
+		server.WriteChannel(msg.channel, s)
 	}
 }
 
@@ -248,6 +253,7 @@ func (server *Server) rejoinChannels() {
 
 func (server *Server) handleServer(s string) {
 	msg := parse(s)
+	fmt.Println(s)
 	if msg.event == "ERROR" {
 		server.createServer()
 		go server.listenServer()

@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -20,20 +21,6 @@ type Msg struct {
 	msg     string
 }
 
-type Server struct {
-	server     string
-	conn       net.Conn
-	port       string
-	nick       string
-	realName   string
-	password   string
-	channels   map[string]bool
-	msgChan    chan Msg
-	serverChan chan string
-	tls        bool
-	Dir        string
-}
-
 type Parsed struct {
 	nick     string
 	userinfo string
@@ -47,6 +34,16 @@ var chanCreated = make(map[string]bool)
 var clientNick, ircPath string
 var serverChan = make(chan string) // raw output from server
 var msgChan = make(chan Msg)       // user input
+
+func mustWriteln(w io.Writer, s string) {
+	if _, err := fmt.Fprint(w, s+"\r\n"); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func mustWritef(w io.Writer, form string, args ...interface{}) {
+	mustWriteln(w, fmt.Sprintf(form, args...))
+}
 
 // Thanks Twisted
 func parse(s string) Parsed {
@@ -114,8 +111,7 @@ func createFiles(directory string) bool {
 	return true
 }
 
-func (server *Server) writeOutLog(channel string, text Parsed) {
-
+func writeOutLog(channel string, text Parsed) {
 	msg := ""
 	if text.event == "PRIVMSG" {
 		msg = fmt.Sprintf("<%s> %s", text.nick, text.args[1])
@@ -134,26 +130,17 @@ func (server *Server) writeOutLog(channel string, text Parsed) {
 	} else if text.event == "TOPIC" {
 		msg = fmt.Sprintf("-!- %s changed topic to \"%s\"", text.nick, text.args[1])
 	}
-	server.WriteChannel(channel, msg)
+	writeChannel(channel, msg)
 }
 
-func (server *Server) WriteChannel(channel string, msg string) {
+func writeChannel(channel string, msg string) {
 	if msg != "" {
-		createFiles(server.Dir + "/" + channel)
-		f, _ := os.OpenFile(server.Dir+"/"+channel+"/out", os.O_RDWR|os.O_APPEND, 0660)
+		createFiles(ircPath + "/" + channel)
+		f, _ := os.OpenFile(ircPath+"/"+channel+"/out", os.O_RDWR|os.O_APPEND, 0660)
 		defer f.Close()
 		t := time.Now()
-		currTime := fmt.Sprintf("%s", t.Format("2006-01-02 15:04:05"))
-		_, _ = f.WriteString(currTime + " " + msg + "\n")
+		f.WriteString(fmt.Sprintf("%s %s\n", t.Format("2006-01-02 15:04:05"), msg))
 	}
-}
-
-func (server *Server) Write(msg string) {
-	server.conn.Write([]byte(msg + "\n"))
-}
-
-func (server *Server) Writef(msg string, arg ...interface{}) {
-	server.Write(fmt.Sprintf(msg, arg...))
 }
 
 func listenFile(channel string) {
@@ -184,8 +171,8 @@ func listenServer(conn net.Conn, server, pass, realName string) {
 		fmt.Fprintf(conn, "PASS %s", pass)
 	}
 	fmt.Fprintf(conn, "USER %s 0 * :%s", clientNick, realName)
-	fmt.Fprintf(conn, "NICK %s", nick)
-	buffer := bufio.NewScanner(server.conn)
+	fmt.Fprintf(conn, "NICK %s", clientNick)
+	buffer := bufio.NewScanner(conn)
 	for {
 		for buffer.Scan() {
 			serverChan <- buffer.Text()
@@ -196,7 +183,7 @@ func listenServer(conn net.Conn, server, pass, realName string) {
 	}
 }
 
-func connServer(server, port string, tls bool) net.Conn {
+func connServer(server, port string, useTLS bool) net.Conn {
 	var err error
 	tcpAddr, err := net.ResolveTCPAddr("tcp", server+":"+port)
 	if err != nil {
@@ -212,7 +199,7 @@ func connServer(server, port string, tls bool) net.Conn {
 	if err != nil {
 		log.Print("Could not set keep alive:", err)
 	}
-	if tls {
+	if useTLS {
 		return tls.Client(conn, &tls.Config{
 			InsecureSkipVerify: true,
 		})
@@ -221,76 +208,72 @@ func connServer(server, port string, tls bool) net.Conn {
 	return conn
 }
 
-func (server *Server) handleMsg(msg Msg) {
+func handleMsg(conn net.Conn, msg Msg) {
 	events := strings.SplitN(msg.msg, " ", 3)
 	// Events
-	if "/j" == events[0] {
-		_, ok := server.channels[events[1]]
-		if ok == false {
-			server.Writef("JOIN :%s", events[1])
-			go server.listenFile(events[1])
-			server.channels[events[1]] = true
-			if len(events) > 2 {
-				server.Writef("PRIVMSG %s :%s", events[1], events[2])
-			}
+	if "/j" == events[0] && !chanCreated[events[1]] {
+		mustWritef(conn, "JOIN :%s", events[1])
+		go listenFile(events[1])
+		chanCreated[events[1]] = true
+		if len(events) > 2 {
+			mustWritef(conn, "PRIVMSG %s :%s", events[1], events[2])
 		}
 	} else if "/a" == events[0] {
-		server.Writef("AWAY :%s", strings.Join(events[1:], " "))
+		mustWritef(conn, "AWAY :%s", strings.Join(events[1:], " "))
 	} else if "/n" == events[0] {
-		server.Writef("NICK %s", events[1])
+		mustWritef(conn, "NICK %s", events[1])
 	} else if "/t" == events[0] {
-		server.Writef("TOPIC %s :%s", events[1], strings.Join(events[2:], " "))
+		mustWritef(conn, "TOPIC %s :%s", events[1], strings.Join(events[2:], " "))
 	} else if "/l" == events[0] {
-		server.Writef("PART %s", events[1])
-		delete(server.channels, events[1])
+		mustWritef(conn, "PART %s", events[1])
+		delete(chanCreated, events[1])
 	} else {
-		server.Writef("PRIVMSG %s :%s", msg.channel, msg.msg)
-		s := fmt.Sprintf("<%s> %s", server.nick, msg.msg)
-		server.WriteChannel(msg.channel, s)
+		mustWritef(conn, "PRIVMSG %s :%s", msg.channel, msg.msg)
+		s := fmt.Sprintf("<%s> %s", clientNick, msg.msg)
+		writeChannel(msg.channel, s)
 	}
 }
 
-func (server *Server) rejoinChannels() {
-	for channel, _ := range server.channels {
-		server.Writef("JOIN :%s", channel)
+func rejoinAll(conn net.Conn) {
+	for c := range chanCreated {
+		mustWritef(conn, "JOIN :%s", c)
 	}
 }
 
-func (server *Server) handleServer(s string) {
+func handleServer(conn net.Conn, s string) {
 	msg := parse(s)
 	fmt.Println(s)
-	if msg.event == "ERROR" {
-		server.createServer()
-		go server.listenServer()
-		return
-	}
+	/*	if msg.event == "ERROR" {
+	 *		server.createServer()
+	 *		go server.listenServer()
+	 *		return
+	 *	}
+	 */
 	if msg.event == "266" {
-		// Rejoin channels
-		server.rejoinChannels()
+		rejoinAll(conn)
 		return
 	}
 	if msg.event == "PING" {
-		server.Writef("PONG %s", msg.args[0])
+		mustWritef(conn, "PONG %s", msg.args[0])
 		return
 	}
-	if len(msg.nick) == 0 && msg.channel == server.nick || msg.channel == "*" || msg.event == "QUIT" {
-		server.writeOutLog("", msg)
+	if len(msg.nick) == 0 && msg.channel == clientNick || msg.channel == "*" || msg.event == "QUIT" {
+		writeOutLog("", msg)
 		return
 	}
 	var channel string
-	if msg.channel == server.nick {
+	if msg.channel == clientNick {
 		channel = strings.ToLower(msg.nick)
 	} else {
 		channel = strings.ToLower(msg.channel)
 	}
 	// Check if we have a thread on the channel
 	// Create if there isnt
-	_, ok := server.channels[channel]
-	if ok == false {
-		go server.listenFile(channel)
-		server.channels[channel] = true
+	if !chanCreated[channel] {
+		go listenFile(channel)
+		chanCreated[channel] = true
 	}
-	server.writeOutLog(channel, msg)
+	writeOutLog(channel, msg)
 }
 
 func run(conn net.Conn, server, pass, realName string) {
@@ -302,9 +285,9 @@ func run(conn net.Conn, server, pass, realName string) {
 		case <-ticker.C:
 			fmt.Fprintf(conn, "PING %d\r\n", time.Now().UnixNano())
 		case s := <-serverChan:
-			server.handleServer(s)
-		case s := <-msgChan:
-			server.handleMsg(s)
+			handleServer(conn, s)
+		case m := <-msgChan:
+			handleMsg(conn, m)
 		}
 	}
 }
@@ -315,7 +298,7 @@ func main() {
 	tls := flag.Bool("tls", false, "Use TLS for the connection (default false)")
 	pass := flag.String("k", "IIPASS", "Specify a environment variable for your IRC password")
 	path := flag.String("i", "", "Specify a path for the IRC connection (default ~/irc)")
-	clientNick := flag.String("n", "iii", "Speciy a default nick")
+	nick := flag.String("n", "iii", "Speciy a default nick")
 	realName := flag.String("f", "ii Improved", "Speciy a default real name")
 	flag.Parse()
 
@@ -336,8 +319,9 @@ func main() {
 	}
 
 	password := os.Getenv(*pass)
-	ircpath = *path + "/" + *server
+	ircPath = *path + "/" + *server
+	clientNick = *nick
 
 	conn := connServer(*server, *port, *tls)
-	run(conn, *server, *password, *realName)
+	run(conn, *server, password, *realName)
 }

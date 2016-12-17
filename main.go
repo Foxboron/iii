@@ -355,13 +355,13 @@ loop:
 }
 
 func main() {
-	server := flag.String("s", "irc.freenode.net", "Specify server")
-	port := flag.String("p", "", "Server port (default 6667, TLS default 6697)")
-	tls := flag.Bool("tls", false, "Use TLS for the connection (default false)")
-	pass := flag.String("k", "IIPASS", "Specify a environment variable for your IRC password")
-	path := flag.String("i", "", "Specify a path for the IRC connection (default ~/irc)")
-	nick := flag.String("n", "iii", "Speciy a default nick")
-	realName := flag.String("f", "ii Improved", "Speciy a default real name")
+	nick := flag.String("n", "", "IRC nick ($USER)")
+	pass := flag.String("k", "", "Read password from variable (e.g. IIPASS)")
+	path := flag.String("i", "", "IRC path (~/irc)")
+	port := flag.String("p", "", "Server port (6667/TLS: 6697)")
+	realName := flag.String("f", "", "Real name (nick)")
+	server := flag.String("s", "", "Server to connect to")
+	tls := flag.Bool("t", false, "Use TLS")
 	flag.Parse()
 
 	if *port == "" {
@@ -372,20 +372,24 @@ func main() {
 		}
 	}
 
+	usr, err := user.Current()
+	if err != nil {
+		log.Fatal(err)
+	}
 	if *path == "" {
-		usr, err := user.Current()
-		if err != nil {
-			log.Fatal("Could not get home directory", err)
-		}
 		*path = usr.HomeDir + "/irc"
 	}
-
-	password := os.Getenv(*pass)
+	if *nick == "" {
+		*nick = usr.Username
+	}
+	if *realName == "" {
+		*realName = *nick
+	}
 	ircPath = *path + "/" + *server
 	clientNick = *nick
 
 	conn := connServer(*server, *port, *tls)
 	defer conn.Close()
-	login(conn, *server, password, *realName)
+	login(conn, *server, os.Getenv(*pass), *realName)
 	run(conn, *server)
 }

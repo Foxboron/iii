@@ -18,7 +18,7 @@ import (
 type Msg struct {
 	channel string
 	file    string
-	msg     string
+	s       string
 }
 
 type Parsed struct {
@@ -32,8 +32,9 @@ type Parsed struct {
 
 var chanCreated = make(map[string]bool)
 var clientNick, ircPath string
-var serverChan = make(chan string) // raw output from server
+var serverChan = make(chan Parsed) // output from server
 var msgChan = make(chan Msg)       // user input
+var done = make(chan struct{})
 
 func mustWriteln(w io.Writer, s string) {
 	if _, err := fmt.Fprint(w, s+"\r\n"); err != nil {
@@ -90,6 +91,15 @@ func parse(s string) Parsed {
 		args:     args}
 }
 
+func hasQuit() bool {
+	select {
+	case <-done:
+		return true
+	default:
+		return false
+	}
+}
+
 // Creates the fifo files and directories
 func createFiles(directory string) bool {
 	if _, err := os.Stat(directory); err == nil {
@@ -143,44 +153,45 @@ func writeChannel(channel string, msg string) {
 	}
 }
 
+// listenFile continuously scans for user input to channel,
+// marshals it and sends it on msgChan.
 func listenFile(channel string) {
-	channel = strings.ToLower(channel)
-	filePath := ircPath + "/" + channel
+	filePath := ircPath + "/"
+
 	if channel != "" {
-		filePath = filePath + "/"
+		filePath += strings.ToLower(channel) + "/"
 	}
 
 	createFiles(filePath)
-	file, err := os.OpenFile(filePath+"in", os.O_CREATE|syscall.O_RDONLY|syscall.O_NONBLOCK, os.ModeNamedPipe)
-	defer file.Close()
+	file, err := os.Open(filePath + "in")
 	if err != nil {
 		log.Print("Tried listening on channel:", channel, err)
+		return
 	}
-	buffer := bufio.NewReader(file)
-	for {
-		bytes, _, _ := buffer.ReadLine()
-		if len(bytes) != 0 {
-			msgChan <- Msg{channel: channel, msg: string(bytes), file: filePath}
+	defer file.Close()
+
+	in := bufio.NewScanner(file)
+	for in.Scan() {
+		if hasQuit() || !chanCreated[channel] {
+			break
 		}
-		time.Sleep(10 * time.Millisecond)
+		msgChan <- Msg{channel: channel, s: in.Text(), file: filePath}
 	}
 }
 
-func listenServer(conn net.Conn, server, pass, realName string) {
-	if pass != "" {
-		fmt.Fprintf(conn, "PASS %s", pass)
-	}
-	fmt.Fprintf(conn, "USER %s 0 * :%s", clientNick, realName)
-	fmt.Fprintf(conn, "NICK %s", clientNick)
-	buffer := bufio.NewScanner(conn)
-	for {
-		for buffer.Scan() {
-			serverChan <- buffer.Text()
-			if strings.Split(buffer.Text(), " :")[0] == "ERROR" {
-				return
-			}
+// listenServer scans for server messages on conn and sends
+// them on serverChan.
+func listenServer(conn net.Conn) {
+	in := bufio.NewScanner(conn)
+	for in.Scan() {
+		serverChan <- parse(in.Text())
+		if strings.HasPrefix(in.Text(), "ERROR") {
+			break
 		}
 	}
+
+	// tell all listening goroutines to exit
+	close(done)
 }
 
 func connServer(server, port string, useTLS bool) net.Conn {
@@ -208,29 +219,37 @@ func connServer(server, port string, useTLS bool) net.Conn {
 	return conn
 }
 
-func handleMsg(conn net.Conn, msg Msg) {
-	events := strings.SplitN(msg.msg, " ", 3)
-	// Events
-	if "/j" == events[0] && !chanCreated[events[1]] {
-		mustWritef(conn, "JOIN :%s", events[1])
-		go listenFile(events[1])
-		chanCreated[events[1]] = true
-		if len(events) > 2 {
-			mustWritef(conn, "PRIVMSG %s :%s", events[1], events[2])
+// Send formats the receiver’s contents as an IRC
+// message and writes it to conn.
+func (m Msg) Send(conn net.Conn) {
+	if m.s[0] != '/' {
+		mustWritef(conn, "PRIVMSG %s :%s", m.channel, m.s)
+		return
+	}
+
+	args := strings.SplitN(m.s, " ", 3)
+	switch args[0] {
+	case "/a":
+		mustWritef(conn, "AWAY :%s", strings.Join(args[1:], " "))
+	case "/j":
+		if args[1] != "" && !chanCreated[args[1]] {
+			// FIXME: handle key field
+			mustWritef(conn, "JOIN %s", args[1])
+			go listenFile(args[1])
+			chanCreated[args[1]] = true
 		}
-	} else if "/a" == events[0] {
-		mustWritef(conn, "AWAY :%s", strings.Join(events[1:], " "))
-	} else if "/n" == events[0] {
-		mustWritef(conn, "NICK %s", events[1])
-	} else if "/t" == events[0] {
-		mustWritef(conn, "TOPIC %s :%s", events[1], strings.Join(events[2:], " "))
-	} else if "/l" == events[0] {
-		mustWritef(conn, "PART %s", events[1])
-		delete(chanCreated, events[1])
-	} else {
-		mustWritef(conn, "PRIVMSG %s :%s", msg.channel, msg.msg)
-		s := fmt.Sprintf("<%s> %s", clientNick, msg.msg)
-		writeChannel(msg.channel, s)
+	case "/l":
+		if m.channel != "" {
+			mustWritef(conn, "PART %s", m.channel)
+			delete(chanCreated, m.channel)
+		}
+	case "/n":
+		mustWritef(conn, "NICK %s", args[1])
+	case "/t":
+		mustWritef(conn, "TOPIC %s :%s", args[1],
+			strings.Join(args[2:], " "))
+	default: // raw command
+		mustWriteln(conn, m.s)
 	}
 }
 
@@ -240,54 +259,59 @@ func rejoinAll(conn net.Conn) {
 	}
 }
 
-func handleServer(conn net.Conn, s string) {
-	msg := parse(s)
-	fmt.Println(s)
-	/*	if msg.event == "ERROR" {
-	 *		server.createServer()
-	 *		go server.listenServer()
-	 *		return
-	 *	}
-	 */
-	if msg.event == "266" {
+func handleServer(conn net.Conn, p Parsed) {
+	switch p.event {
+	case "266":
 		rejoinAll(conn)
-		return
+	case "QUIT":
+		if p.nick == "" && p.channel == clientNick || p.channel == "*" {
+			writeOutLog("", p)
+		}
+	case "PING":
+		mustWritef(conn, "PONG %s", p.args[0])
+	default:
+		var c string
+		if p.channel == clientNick {
+			c = strings.ToLower(p.nick)
+		} else {
+			c = strings.ToLower(p.channel)
+		}
+
+		// create files and listening goroutine if needed
+		if !chanCreated[c] {
+			chanCreated[c] = true
+			go listenFile(c)
+		}
+		writeOutLog(c, p)
 	}
-	if msg.event == "PING" {
-		mustWritef(conn, "PONG %s", msg.args[0])
-		return
-	}
-	if len(msg.nick) == 0 && msg.channel == clientNick || msg.channel == "*" || msg.event == "QUIT" {
-		writeOutLog("", msg)
-		return
-	}
-	var channel string
-	if msg.channel == clientNick {
-		channel = strings.ToLower(msg.nick)
-	} else {
-		channel = strings.ToLower(msg.channel)
-	}
-	// Check if we have a thread on the channel
-	// Create if there isnt
-	if !chanCreated[channel] {
-		go listenFile(channel)
-		chanCreated[channel] = true
-	}
-	writeOutLog(channel, msg)
 }
 
-func run(conn net.Conn, server, pass, realName string) {
-	go listenServer(conn, server, pass, realName)
-	go listenFile("")
+func login(conn net.Conn, server, pass, name string) {
+	if pass != "" {
+		mustWritef(conn, "PASS %s", pass)
+	}
+	mustWritef(conn, "NICK %s", clientNick)
+	mustWritef(conn, "USER %s localhost %s :%s", clientNick, server, name)
+}
+
+func run(conn net.Conn, server string) {
+	go listenServer(conn)
+	go listenFile("") // server input
 	ticker := time.NewTicker(1 * time.Minute)
+loop:
 	for {
 		select {
-		case <-ticker.C:
-			fmt.Fprintf(conn, "PING %d\r\n", time.Now().UnixNano())
+		case <-done:
+			for range msgChan {
+				// drain remaining
+			}
+			break loop
+		case <-ticker.C: // FIXME: ping timeout check
+			mustWritef(conn, "PING %s", server)
 		case s := <-serverChan:
 			handleServer(conn, s)
 		case m := <-msgChan:
-			handleMsg(conn, m)
+			m.Send(conn)
 		}
 	}
 }
@@ -323,5 +347,7 @@ func main() {
 	clientNick = *nick
 
 	conn := connServer(*server, *port, *tls)
-	run(conn, *server, password, *realName)
+	defer conn.Close()
+	login(conn, *server, password, *realName)
+	run(conn, *server)
 }

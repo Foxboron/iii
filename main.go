@@ -237,20 +237,17 @@ func listenServer(conn net.Conn) {
 }
 
 func connServer(server, port string, useTLS bool) net.Conn {
-	var err error
 	tcpAddr, err := net.ResolveTCPAddr("tcp", server+":"+port)
 	if err != nil {
-		log.Fatal("ResolveTCPAddr failed:", err.Error())
-		os.Exit(1)
+		log.Fatal(err)
 	}
 	conn, err := net.DialTCP("tcp", nil, tcpAddr)
 	if err != nil {
-		log.Fatal("Connection blew up:", err)
-		os.Exit(1)
+		log.Fatal(err)
 	}
 	err = conn.SetKeepAlive(true)
 	if err != nil {
-		log.Print("Could not set keep alive:", err)
+		log.Print(err)
 	}
 	if useTLS {
 		return tls.Client(conn, &tls.Config{

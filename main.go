@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/tls"
 	"flag"
 	"fmt"
@@ -42,49 +43,59 @@ func mustWritef(w io.Writer, form string, args ...interface{}) {
 	mustWriteln(w, fmt.Sprintf(form, args...))
 }
 
-// Thanks Twisted
-func parse(s string) Parsed {
-	raw := s
-	var prefix string
-	var command string
-	var args []string
-	var trailing []string
-	var nick string
-	var userinfo string
+// parse returns a filled Parsed structure representing its input.
+func parse(input []byte) (Parsed, error) {
+	var p Parsed
+	p.raw = string(input)
 
-	if string(s[0]) == ":" {
-		ret := strings.SplitN(s[1:], " ", 2)
-		prefix = ret[0]
-		s = ret[1]
+	// step over leading :
+	if input[0] == ':' {
+		input = input[1:]
 	}
-	if strings.Index(s, " :") != -1 {
-		ret := strings.SplitN(s, " :", 2)
-		s = ret[0]
-		trailing = ret[1:]
 
-		args = strings.Split(s, " ")
-		args = append(args, trailing...)
+	// split on spaces, unless a trailing param is found
+	splf := func(data []byte, atEOF bool) (advance int, token []byte,
+		err error) {
+		if data[0] == ':' && len(data) > 1 { // trailing
+			return 0, data[1:], bufio.ErrFinalToken
+		}
+
+		i := 0
+		for ; i < len(data); i++ {
+			if data[i] == ' ' {
+				break
+			}
+		}
+		return i + 1, data[:i], nil
+	}
+	in := bufio.NewScanner(bytes.NewBuffer(input))
+	in.Split(splf)
+
+	// prefix
+	if ok := in.Scan(); !ok {
+		return p, fmt.Errorf("expected prefix")
+	}
+	if strings.Contains(in.Text(), "!") { // userinfo included
+		pref := strings.Split(in.Text(), "!")
+		p.nick = pref[0]
+		p.uinf = pref[1]
 	} else {
-		args = strings.Split(s, " ")
-	}
-	command = args[0]
-	args = args[1:]
-
-	prefixSplit := strings.Split(prefix, "!")
-	if len(prefixSplit) == 1 {
-		nick = ""
-		userinfo = ""
-	} else {
-		nick = prefixSplit[0]
-		userinfo = prefixSplit[1]
+		p.nick = in.Text()
 	}
 
-	return Parsed{nick: nick,
-		channel:  args[0],
-		uinf: userinfo,
-		cmd:    command,
-		raw:      raw,
-		args:     args}
+	// command
+	if ok := in.Scan(); !ok {
+		return p, fmt.Errorf("expected command")
+	}
+	p.cmd = in.Text()
+
+	// params
+	for i := 0; in.Scan(); i++ {
+		p.args = append(p.args, in.Text())
+	}
+
+	p.channel = p.args[0]
+	return p, nil
 }
 
 func hasQuit() bool {
@@ -210,7 +221,12 @@ func listenFile(channel string) {
 func listenServer(conn net.Conn) {
 	in := bufio.NewScanner(conn)
 	for in.Scan() {
-		serverChan <- parse(in.Text())
+		if p, err := parse([]byte(in.Text())); err != nil {
+			log.Print("parse error:", err)
+		} else {
+			serverChan <- p
+		}
+
 		if strings.HasPrefix(in.Text(), "ERROR") {
 			break
 		}

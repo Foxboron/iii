@@ -43,6 +43,11 @@ type Parsed struct {
 	args     []string
 }
 
+var chanCreated = make(map[string]bool)
+var clientNick, ircPath string
+var serverChan = make(chan string) // raw output from server
+var msgChan = make(chan Msg)       // user input
+
 // Thanks Twisted
 func parse(s string) Parsed {
 	raw := s
@@ -151,9 +156,9 @@ func (server *Server) Writef(msg string, arg ...interface{}) {
 	server.Write(fmt.Sprintf(msg, arg...))
 }
 
-func (server *Server) listenFile(channel string) {
+func listenFile(channel string) {
 	channel = strings.ToLower(channel)
-	filePath := server.Dir + "/" + channel
+	filePath := ircPath + "/" + channel
 	if channel != "" {
 		filePath = filePath + "/"
 	}
@@ -168,22 +173,22 @@ func (server *Server) listenFile(channel string) {
 	for {
 		bytes, _, _ := buffer.ReadLine()
 		if len(bytes) != 0 {
-			server.msgChan <- Msg{channel: channel, msg: string(bytes), file: filePath}
+			msgChan <- Msg{channel: channel, msg: string(bytes), file: filePath}
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 }
 
-func (server *Server) listenServer() {
-	if server.password != "" {
-		server.Writef("PASS %s", server.password)
+func listenServer(conn net.Conn, server, pass, realName string) {
+	if pass != "" {
+		fmt.Fprintf(conn, "PASS %s", pass)
 	}
-	server.Writef("USER %s 0 * :%s", server.nick, server.realName)
-	server.Writef("NICK %s", server.nick)
+	fmt.Fprintf(conn, "USER %s 0 * :%s", clientNick, realName)
+	fmt.Fprintf(conn, "NICK %s", nick)
 	buffer := bufio.NewScanner(server.conn)
 	for {
 		for buffer.Scan() {
-			server.serverChan <- buffer.Text()
+			serverChan <- buffer.Text()
 			if strings.Split(buffer.Text(), " :")[0] == "ERROR" {
 				return
 			}
@@ -191,10 +196,9 @@ func (server *Server) listenServer() {
 	}
 }
 
-func (server *Server) createServer() {
-	var tlsConn net.Conn
+func connServer(server, port string, tls bool) net.Conn {
 	var err error
-	tcpAddr, err := net.ResolveTCPAddr("tcp", fmt.Sprintf("%s:%s", server.server, server.port))
+	tcpAddr, err := net.ResolveTCPAddr("tcp", server+":"+port)
 	if err != nil {
 		log.Fatal("ResolveTCPAddr failed:", err.Error())
 		os.Exit(1)
@@ -208,12 +212,13 @@ func (server *Server) createServer() {
 	if err != nil {
 		log.Print("Could not set keep alive:", err)
 	}
-	if server.tls {
-		tlsConn = tls.Client(conn, &tls.Config{
+	if tls {
+		return tls.Client(conn, &tls.Config{
 			InsecureSkipVerify: true,
 		})
 	}
-	server.conn = tlsConn
+
+	return conn
 }
 
 func (server *Server) handleMsg(msg Msg) {
@@ -288,17 +293,17 @@ func (server *Server) handleServer(s string) {
 	server.writeOutLog(channel, msg)
 }
 
-func (server *Server) Run() {
-	go server.listenServer()
-	go server.listenFile("")
+func run(conn net.Conn, server, pass, realName string) {
+	go listenServer(conn, server, pass, realName)
+	go listenFile("")
 	ticker := time.NewTicker(1 * time.Minute)
 	for {
 		select {
 		case <-ticker.C:
-			server.Writef("PING %d", time.Now().UnixNano())
-		case s := <-server.serverChan:
+			fmt.Fprintf(conn, "PING %d\r\n", time.Now().UnixNano())
+		case s := <-serverChan:
 			server.handleServer(s)
-		case s := <-server.msgChan:
+		case s := <-msgChan:
 			server.handleMsg(s)
 		}
 	}
@@ -310,7 +315,7 @@ func main() {
 	tls := flag.Bool("tls", false, "Use TLS for the connection (default false)")
 	pass := flag.String("k", "IIPASS", "Specify a environment variable for your IRC password")
 	path := flag.String("i", "", "Specify a path for the IRC connection (default ~/irc)")
-	nick := flag.String("n", "iii", "Speciy a default nick")
+	clientNick := flag.String("n", "iii", "Speciy a default nick")
 	realName := flag.String("f", "ii Improved", "Speciy a default real name")
 	flag.Parse()
 
@@ -330,17 +335,9 @@ func main() {
 		*path = usr.HomeDir + "/irc"
 	}
 
-	serverRun := Server{
-		server:     *server,
-		port:       *port,
-		nick:       *nick,
-		realName:   *realName,
-		password:   os.Getenv(*pass),
-		channels:   map[string]bool{},
-		msgChan:    make(chan Msg),
-		serverChan: make(chan string),
-		tls:        *tls,
-		Dir:        *path + "/" + *server}
-	serverRun.createServer()
-	serverRun.Run()
+	password := os.Getenv(*pass)
+	ircpath = *path + "/" + *server
+
+	conn := connServer(*server, *port, *tls)
+	run(conn, *server, *password, *realName)
 }

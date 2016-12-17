@@ -11,8 +11,9 @@ import (
 	"os"
 	"os/user"
 	"strings"
-	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 type Msg struct {
@@ -101,24 +102,24 @@ func hasQuit() bool {
 }
 
 // Creates the fifo files and directories
-func createFiles(directory string) bool {
-	if _, err := os.Stat(directory); err == nil {
-		return false
+func createFiles(dir string) error {
+	fi, err := os.Stat(dir)
+	if err == nil && fi.Mode().IsDir() {
+		return nil // already created
 	}
-	err := os.MkdirAll(directory, 0744)
+
+	if err = os.MkdirAll(dir, 0744); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(dir+"/out", os.O_CREATE, 0660)
 	if err != nil {
-		log.Print("Tried making directory:", directory, err)
+		return err
 	}
-	f, err := os.OpenFile(directory+"/out", os.O_CREATE, 0660)
 	defer f.Close()
-	if err != nil {
-		log.Print("Tried opening out file for directory:", directory, err)
+	if err = unix.Mkfifo(dir+"/in", 0700); err != nil {
+		return err
 	}
-	err = syscall.Mkfifo(directory+"/in", 0700)
-	if err != nil {
-		log.Print("Tried creating fifo file for directory:", directory, err)
-	}
-	return true
+	return nil
 }
 
 func writeOutLog(channel string, text Parsed) {

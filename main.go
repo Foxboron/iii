@@ -18,17 +18,12 @@ import (
 
 type Msg struct {
 	channel string
-	file    string
 	s       string
 }
 
 type Parsed struct {
-	nick     string
-	userinfo string
-	event    string
-	channel  string
-	raw      string
-	args     []string
+	nick, uinf, cmd, channel, raw string
+	args                          []string
 }
 
 var chanCreated = make(map[string]bool)
@@ -86,8 +81,8 @@ func parse(s string) Parsed {
 
 	return Parsed{nick: nick,
 		channel:  args[0],
-		userinfo: userinfo,
-		event:    command,
+		uinf: userinfo,
+		cmd:    command,
 		raw:      raw,
 		args:     args}
 }
@@ -122,36 +117,66 @@ func createFiles(dir string) error {
 	return nil
 }
 
-func writeOutLog(channel string, text Parsed) {
-	msg := ""
-	if text.event == "PRIVMSG" {
-		msg = fmt.Sprintf("<%s> %s", text.nick, text.args[1])
-	} else if text.event == "JOIN" {
-		msg = fmt.Sprintf("-!- %s(~%s) has joined %s", text.nick, text.userinfo, text.channel)
-	} else if text.event == "PART" {
-		msg = fmt.Sprintf("-!- %s(~%s) has left %s", text.nick, text.userinfo, text.channel)
-	} else if text.event == "QUIT" {
-		msg = fmt.Sprintf("-!- %s(~%s) has quit", text.nick, text.userinfo)
-	} else if text.event == "MODE" {
-		msg = fmt.Sprintf("-!- %s changed mode/%s -> %s", text.nick, text.channel, text.args[1])
-	} else if text.event == "NOTICE" {
-		msg = fmt.Sprintf("-!- NOTICE %s", text.args[1])
-	} else if text.event == "KICK" {
-		msg = fmt.Sprintf("-!- %s kicked %s (\"%s\")", text.nick, text.args[1], text.args[2])
-	} else if text.event == "TOPIC" {
-		msg = fmt.Sprintf("-!- %s changed topic to \"%s\"", text.nick, text.args[1])
+// Log pretty prints the receiver’s contents to
+// the appropriate channel out.
+func (p Parsed) Log() {
+	var s string
+
+	switch p.cmd {
+	case "ERROR":
+		s = fmt.Sprintf("-!- ERROR: %s", p.args[0])
+	case "JOIN":
+		s = fmt.Sprintf("-!- %s (%s) has joined %s", p.nick,
+			p.uinf, p.channel)
+	case "KICK":
+		var t string
+		if len(p.args) > 2 { // comment included
+			t = p.args[2]
+		}
+		s = fmt.Sprintf("-!- %s kicked %s from %s (\"%s\")", p.nick,
+			p.args[1], p.args[0], t)
+	case "MODE":
+		s = fmt.Sprintf("-!- %s changed mode/%s -> %s", p.nick,
+			p.channel, p.args[0])
+	case "NICK":
+		s = fmt.Sprintf("-!- %s changed nick to %s", p.nick,
+			p.args[0])
+	case "NOTICE":
+		s = fmt.Sprintf("-!- NOTICE: %s", p.args[0])
+	case "QUIT":
+		s = fmt.Sprintf("-!- %s (%s) has quit (%s)", p.nick,
+			p.uinf, p.args[0])
+	case "PART":
+		s = fmt.Sprintf("-!- %s (%s) has left %s", p.nick, p.uinf,
+			p.args[0])
+	case "PRIVMSG":
+		s = fmt.Sprintf("<%s> %s", p.nick, p.args[0])
+	case "TOPIC":
+		var t string
+		if len(p.args) > 1 { // new topic
+			t = p.args[1]
+		}
+		s = fmt.Sprintf("-!- %s changed the topic to \"%s\"", p.nick, t)
 	}
-	writeChannel(channel, msg)
+
+	if s != "" {
+		if err := writeChannel(p.channel, s); err != nil {
+			log.Print(err)
+		}
+	}
 }
 
-func writeChannel(channel string, msg string) {
-	if msg != "" {
-		createFiles(ircPath + "/" + channel)
-		f, _ := os.OpenFile(ircPath+"/"+channel+"/out", os.O_RDWR|os.O_APPEND, 0660)
-		defer f.Close()
-		t := time.Now()
-		f.WriteString(fmt.Sprintf("%s %s\n", t.Format("2006-01-02 15:04:05"), msg))
+func writeChannel(channel string, msg string) error {
+	createFiles(ircPath + "/" + channel)
+	f, err := os.OpenFile(ircPath+"/"+channel+"/out", os.O_WRONLY|os.O_APPEND,
+		0660)
+	if err != nil {
+		return err
 	}
+	defer f.Close()
+	t := time.Now()
+	f.WriteString(fmt.Sprintf("%s %s\n", t.Format("2006-01-02 15:04:05"), msg))
+	return nil
 }
 
 // listenFile continuously scans for user input to channel,
@@ -176,7 +201,7 @@ func listenFile(channel string) {
 		if hasQuit() || !chanCreated[channel] {
 			break
 		}
-		msgChan <- Msg{channel: channel, s: in.Text(), file: filePath}
+		msgChan <- Msg{channel: channel, s: in.Text()}
 	}
 }
 
@@ -261,13 +286,9 @@ func rejoinAll(conn net.Conn) {
 }
 
 func handleServer(conn net.Conn, p Parsed) {
-	switch p.event {
+	switch p.cmd {
 	case "266":
 		rejoinAll(conn)
-	case "QUIT":
-		if p.nick == "" && p.channel == clientNick || p.channel == "*" {
-			writeOutLog("", p)
-		}
 	case "PING":
 		mustWritef(conn, "PONG %s", p.args[0])
 	default:
@@ -283,7 +304,7 @@ func handleServer(conn net.Conn, p Parsed) {
 			chanCreated[c] = true
 			go listenFile(c)
 		}
-		writeOutLog(c, p)
+		p.Log()
 	}
 }
 

@@ -334,6 +334,11 @@ func handleServer(conn net.Conn, p Parsed) {
 		mustWritef(conn, "PONG %s", p.args[0])
 	case "PONG":
 		break
+	case "PART":
+		if p.nick == clientNick {
+			break  // don't rejoin channel
+		}
+		fallthrough
 	default:
 		var c string
 		if p.channel == clientNick {

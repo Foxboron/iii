@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"os/user"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +28,10 @@ type Parsed struct {
 	args                          []string
 }
 
+// commands to be logged to server output
+var glMsgs = [...]string{"ERROR", "NICK", "QUIT"}
+var globalCmds = make(map[string]struct{})
+
 var chanCreated = make(map[string]bool)
 var clientNick, ircPath string
 var serverChan = make(chan Parsed) // output from server
@@ -41,6 +46,13 @@ func mustWriteln(w io.Writer, s string) {
 
 func mustWritef(w io.Writer, form string, args ...interface{}) {
 	mustWriteln(w, fmt.Sprintf(form, args...))
+}
+
+func isNumeric(s string) bool {
+	if _, err := strconv.Atoi(s); err == nil {
+		return true
+	}
+	return false
 }
 
 // parse returns a filled Parsed structure representing its input.
@@ -94,7 +106,11 @@ func parse(input []byte) (Parsed, error) {
 		p.args = append(p.args, in.Text())
 	}
 
-	p.channel = p.args[0]
+	// set channel of normal messages. numeric (server) replies and
+	// non-channel-specific commands will have .channel = ""
+	if _, ok := globalCmds[p.cmd]; !ok && !isNumeric(p.cmd) {
+		p.channel = p.args[0]
+	}
 	return p, nil
 }
 
@@ -148,26 +164,28 @@ func (p Parsed) Log() {
 			p.args[1], p.args[0], t)
 	case "MODE":
 		s = fmt.Sprintf("-!- %s changed mode/%s -> %s", p.nick,
-			p.channel, p.args[0])
+			p.args[0], p.args[1])
 	case "NICK":
 		s = fmt.Sprintf("-!- %s changed nick to %s", p.nick,
 			p.args[0])
 	case "NOTICE":
-		s = fmt.Sprintf("-!- NOTICE: %s", p.args[0])
+		s = fmt.Sprintf("-!- NOTICE: %s", p.args[1])
 	case "QUIT":
 		s = fmt.Sprintf("-!- %s (%s) has quit (%s)", p.nick,
-			p.uinf, p.args[0])
+			p.uinf, p.args[1])
 	case "PART":
 		s = fmt.Sprintf("-!- %s (%s) has left %s", p.nick, p.uinf,
 			p.args[0])
 	case "PRIVMSG":
-		s = fmt.Sprintf("<%s> %s", p.nick, p.args[0])
+		s = fmt.Sprintf("<%s> %s", p.nick, p.args[1])
 	case "TOPIC":
 		var t string
 		if len(p.args) > 1 { // new topic
 			t = p.args[1]
 		}
 		s = fmt.Sprintf("-!- %s changed the topic to \"%s\"", p.nick, t)
+	default: // server commands, etc.
+		s = strings.Join(p.args[1:], " ")
 	}
 
 	if s != "" {
@@ -199,8 +217,14 @@ func listenFile(channel string) {
 		filePath += strings.ToLower(channel) + "/"
 	}
 
-	createFiles(filePath)
-	file, err := os.Open(filePath + "in")
+	if err := createFiles(filePath); err != nil {
+		log.Print(err)
+		return
+	}
+	chanCreated[channel] = true
+
+	// need O_RDWR to avoid blocking open
+	file, err := os.OpenFile(filePath+"in", os.O_RDWR, 0700)
 	if err != nil {
 		log.Print("Tried listening on channel:", channel, err)
 		return
@@ -225,10 +249,6 @@ func listenServer(conn net.Conn) {
 			log.Print("parse error:", err)
 		} else {
 			serverChan <- p
-		}
-
-		if strings.HasPrefix(in.Text(), "ERROR") {
-			break
 		}
 	}
 
@@ -292,18 +312,12 @@ func (m Msg) Send(conn net.Conn) {
 	}
 }
 
-func rejoinAll(conn net.Conn) {
-	for c := range chanCreated {
-		mustWritef(conn, "JOIN :%s", c)
-	}
-}
-
 func handleServer(conn net.Conn, p Parsed) {
 	switch p.cmd {
-	case "266":
-		rejoinAll(conn)
 	case "PING":
 		mustWritef(conn, "PONG %s", p.args[0])
+	case "PONG":
+		break
 	default:
 		var c string
 		if p.channel == clientNick {
@@ -360,6 +374,11 @@ func main() {
 	server := flag.String("s", "", "Server to connect to")
 	tls := flag.Bool("t", false, "Use TLS")
 	flag.Parse()
+
+	// initialize set of channel-less commands
+	for _, s := range glMsgs {
+		globalCmds[s] = struct{}{}
+	}
 
 	if *port == "" {
 		if *tls {

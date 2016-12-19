@@ -79,6 +79,14 @@ func TestParse(t *testing.T) {
 				args:    []string{"#lehrer", "Smut & nothing but!"},
 			},
 		},
+		{"ERROR :Closing Link: xxx.xxx.xxx.xxx (Client Quit)",
+			Parsed{nick: "",
+				uinf: "",
+				cmd: "ERROR",
+				channel: "",
+				args: []string{"Closing Link: xxx.xxx.xxx.xxx (Client Quit)"},
+			},
+		},
 	}
 
 	// needed for parse()

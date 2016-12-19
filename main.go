@@ -19,13 +19,17 @@ import (
 )
 
 type Msg struct {
-	channel string
-	s       string
+	channel string // channel destination
+	s       string // user input
 }
 
 type Parsed struct {
-	nick, uinf, cmd, channel, raw string
-	args                          []string
+	nick    string   // source nick (RFC 1459 <servername>)
+	uinf    string   // user info
+	cmd     string   // IRC command
+	channel string   // normalized channel name
+	raw     string   // raw message
+	args    []string // parsed message parameters
 }
 
 // commands to be logged to server output
@@ -56,7 +60,7 @@ func isNumeric(s string) bool {
 }
 
 // parse returns a filled Parsed structure representing its input.
-func parse(input []byte) (Parsed, error) {
+func parse(input string) (Parsed, error) {
 	var p Parsed
 	p.raw = string(input)
 
@@ -72,6 +76,10 @@ func parse(input []byte) (Parsed, error) {
 			return 0, data[1:], bufio.ErrFinalToken
 		}
 
+		if !bytes.ContainsRune(data, ' ') {
+			return 0, data, bufio.ErrFinalToken
+		}
+
 		i := 0
 		for ; i < len(data); i++ {
 			if data[i] == ' ' {
@@ -80,7 +88,7 @@ func parse(input []byte) (Parsed, error) {
 		}
 		return i + 1, data[:i], nil
 	}
-	in := bufio.NewScanner(bytes.NewBuffer(input))
+	in := bufio.NewScanner(strings.NewReader(input))
 	in.Split(splf)
 
 	// prefix
@@ -109,7 +117,7 @@ func parse(input []byte) (Parsed, error) {
 	// set channel of normal messages. numeric (server) replies and
 	// non-channel-specific commands will have .channel = ""
 	if _, ok := globalCmds[p.cmd]; !ok && !isNumeric(p.cmd) {
-		p.channel = p.args[0]
+		p.channel = strings.ToLower(p.args[0])
 	}
 	return p, nil
 }
@@ -245,7 +253,7 @@ func listenFile(channel string) {
 func listenServer(conn net.Conn) {
 	in := bufio.NewScanner(conn)
 	for in.Scan() {
-		if p, err := parse([]byte(in.Text())); err != nil {
+		if p, err := parse(in.Text()); err != nil {
 			log.Print("parse error:", err)
 		} else {
 			serverChan <- p

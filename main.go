@@ -62,10 +62,12 @@ func isNumeric(s string) bool {
 // parse returns a filled Parsed structure representing its input.
 func parse(input string) (Parsed, error) {
 	var p Parsed
+	var hasPrefix bool
 	p.raw = string(input)
 
 	// step over leading :
 	if input[0] == ':' {
+		hasPrefix = true
 		input = input[1:]
 	}
 
@@ -92,15 +94,17 @@ func parse(input string) (Parsed, error) {
 	in.Split(splf)
 
 	// prefix
-	if ok := in.Scan(); !ok {
-		return p, fmt.Errorf("expected prefix")
-	}
-	if strings.Contains(in.Text(), "!") { // userinfo included
-		pref := strings.Split(in.Text(), "!")
-		p.nick = pref[0]
-		p.uinf = pref[1]
-	} else {
-		p.nick = in.Text()
+	if hasPrefix {
+		if ok := in.Scan(); !ok {
+			return p, fmt.Errorf("expected prefix")
+		}
+		if strings.Contains(in.Text(), "!") { // userinfo included
+			pref := strings.Split(in.Text(), "!")
+			p.nick = pref[0]
+			p.uinf = pref[1]
+		} else {
+			p.nick = in.Text()
+		}
 	}
 
 	// command
@@ -179,8 +183,12 @@ func (p Parsed) Log() {
 	case "NOTICE":
 		s = fmt.Sprintf("-!- NOTICE: %s", p.args[1])
 	case "QUIT":
-		s = fmt.Sprintf("-!- %s (%s) has quit (%s)", p.nick,
-			p.uinf, p.args[1])
+		var t string
+		if len(p.args) > 0 { // quit message
+			t = p.args[0]
+		}
+		s = fmt.Sprintf("-!- %s (%s) has quit (\"%s\")", p.nick,
+			p.uinf, t)
 	case "PART":
 		s = fmt.Sprintf("-!- %s (%s) has left %s", p.nick, p.uinf,
 			p.args[0])

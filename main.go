@@ -310,8 +310,8 @@ func main() {
 	tls := flag.Bool("tls", false, "Use TLS for the connection (default false)")
 	pass := flag.String("k", "IIPASS", "Specify a environment variable for your IRC password")
 	path := flag.String("i", "", "Specify a path for the IRC connection (default ~/irc)")
-	nick := flag.String("n", "iii", "Speciy a default nick")
-	realName := flag.String("f", "ii Improved", "Speciy a default real name")
+	nick := flag.String("n", "iii", "Specify a default nick")
+	realName := flag.String("f", "ii Improved", "Specify a default real name")
 	flag.Parse()
 
 	if *port == "" {

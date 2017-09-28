@@ -7,7 +7,7 @@ iii - ii Improved
 suckless version of suckless ii, but with horriblehorrible Golang.  
 http://tools.suckless.org/ii/
   
-iii (and ii) is a filsystem-based IRC client, using files and FIFO pipes to
+iii (and ii) is a filesystem-based IRC client, using files and FIFO pipes to
 communicate with the IRC server. It allows the creation of simple scripts and
 bots.
 
